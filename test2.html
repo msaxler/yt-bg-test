@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YT Hintergrundtest 2 · loadVideoById</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin:0; padding:12px;
+         background:#14161a; color:#e6e8eb; }
+  h1 { font-size:.95rem; margin:0 0 10px; font-weight:600; }
+  #player { width:100%; aspect-ratio:16/9; background:#000; }
+  .row { display:flex; gap:8px; margin:8px 0; flex-wrap:wrap; align-items:center; }
+  button { flex:1; min-width:100px; padding:12px 8px; font-size:.85rem;
+           border:1px solid #3a3f47; background:#222730; color:#e6e8eb;
+           border-radius:6px; }
+  button.go { background:#2d4a35; border-color:#3f6b4a; }
+  button:active { background:#2e343e; }
+  input { padding:9px; font-size:.8rem; box-sizing:border-box; background:#1b1f26;
+          color:#e6e8eb; border:1px solid #3a3f47; border-radius:6px; }
+  #ids { width:100%; }
+  #iv { width:70px; }
+  label { font-size:.75rem; color:#9aa3ad; }
+  #stat { font-size:.78rem; color:#9aa3ad; margin:8px 0; line-height:1.5; }
+  #log { font-family:ui-monospace,monospace; font-size:.7rem; white-space:pre-wrap;
+         background:#0e1013; border:1px solid #2a2f36; border-radius:6px;
+         padding:8px; height:38vh; overflow-y:auto; }
+  .gap  { color:#ff9b5a; font-weight:700; }
+  .ev   { color:#7fd1a0; }
+  .sw   { color:#8ab4f8; font-weight:700; }
+  .verd { color:#ffd166; font-weight:700; }
+</style>
+</head>
+<body>
+
+<h1>YT Hintergrundtest 2 · Playlist vs. loadVideoById</h1>
+
+<div id="player"></div>
+
+<div class="row">
+  <input id="ids" placeholder="Video-IDs, kommagetrennt"
+         value="M7lc1UVf-VE,dQw4w9WgXcQ,9bZkp7q19f0,kJQP7kiw5Fk">
+</div>
+
+<div class="row">
+  <label>Wechsel alle</label>
+  <input id="iv" type="number" value="45" min="15">
+  <label>Sekunden</label>
+  <label style="margin-left:12px">Cue-Punkt</label>
+  <input id="cue" type="number" value="0" min="0" style="width:60px">
+  <label>s</label>
+</div>
+
+<div class="row">
+  <button class="go" id="mA">A · Playlist</button>
+  <button class="go" id="mB">B · loadVideoById</button>
+</div>
+<div class="row">
+  <button id="stop">Stopp</button>
+  <button id="mark">Marke</button>
+  <button id="copy">Log kopieren</button>
+</div>
+
+<div id="stat">Bereit.</div>
+<div id="log"></div>
+
+<script>
+const logEl = document.getElementById('log'), statEl = document.getElementById('stat');
+let player=null, t0=null, lastTick=null, ticks=0, maxGap=0, bgAt=null;
+let switchTimer=null, idx=0, mode=null, list=[], lastSwitchAt=null;
+
+const S = {'-1':'unstarted','0':'ENDED','1':'PLAYING','2':'PAUSED','3':'BUFFERING','5':'CUED'};
+
+function stamp(){
+  const rel = t0 ? ((performance.now()-t0)/1000).toFixed(1).padStart(6) : '   --';
+  return new Date().toTimeString().slice(0,8)+' ['+rel+'s]';
+}
+function log(m,c){
+  const d=document.createElement('div');
+  if(c) d.className=c;
+  d.textContent=stamp()+'  '+m;
+  logEl.appendChild(d); logEl.scrollTop=logEl.scrollHeight;
+}
+
+// Sekundentakt: deckt Einfrieren des Parent-JS auf
+setInterval(()=>{
+  const now=performance.now();
+  if(lastTick!==null){
+    const g=(now-lastTick)/1000;
+    if(g>2.5){ maxGap=Math.max(maxGap,g); log('*** PARENT-JS-LUECKE: '+g.toFixed(1)+'s ***','gap'); }
+  }
+  lastTick=now; ticks++;
+  let s='Modus: '+(mode||'-')+' · Ticks: '+ticks+' · max. Luecke: '+maxGap.toFixed(1)+'s';
+  if(player&&player.getPlayerState){ try{ s+=' · '+(S[player.getPlayerState()]||'?'); }catch(e){} }
+  statEl.textContent=s;
+},1000);
+
+const tag=document.createElement('script');
+tag.src='https://www.youtube.com/iframe_api';
+document.head.appendChild(tag);
+
+window.onYouTubeIframeAPIReady=function(){
+  player=new YT.Player('player',{
+    height:'100%',width:'100%',playerVars:{playsinline:1},
+    events:{
+      onReady:()=>log('Player bereit.'),
+      onStateChange:(e)=>{
+        log('EVENT '+(S[e.data]||e.data)+'  (Nr '+(idx+1)+')','ev');
+        // Beleg fuer H-A: nach einem Wechsel muss PLAYING kommen
+        if(mode==='B' && lastSwitchAt && e.data===1){
+          const d=((performance.now()-lastSwitchAt)/1000).toFixed(1);
+          log('>> URTEIL: Wiedergabe gestartet nach '+d+'s — H-A widerlegt','verd');
+          lastSwitchAt=null;
+        }
+      },
+      onError:(e)=>log('FEHLER Code '+e.data)
+    }
+  });
+};
+
+function readList(){
+  return document.getElementById('ids').value.split(',').map(s=>s.trim()).filter(Boolean);
+}
+function reset(){
+  clearInterval(switchTimer); switchTimer=null;
+  t0=performance.now(); lastTick=null; ticks=0; maxGap=0; idx=0; lastSwitchAt=null;
+  logEl.innerHTML='';
+}
+
+// Modus A: Playlist — YouTube schaltet selbst weiter
+document.getElementById('mA').onclick=()=>{
+  list=readList(); if(!player||!list.length) return;
+  reset(); mode='A';
+  log('MODUS A (Playlist). '+list.length+' Titel. Display ausschalten.');
+  player.loadPlaylist({playlist:list});
+};
+
+// Modus B: loadVideoById aus dem Parent — bildet den Radio-Modus nach
+document.getElementById('mB').onclick=()=>{
+  list=readList(); if(!player||!list.length) return;
+  reset(); mode='B';
+  const iv=Math.max(15,parseInt(document.getElementById('iv').value)||45);
+  const cue=parseInt(document.getElementById('cue').value)||0;
+  log('MODUS B (loadVideoById). Wechsel alle '+iv+'s, Cue '+cue+'s. Display ausschalten.');
+  player.loadVideoById({videoId:list[0], startSeconds:cue});
+  switchTimer=setInterval(()=>{
+    idx=(idx+1)%list.length;
+    lastSwitchAt=performance.now();
+    log('>>> WECHSEL auf Nr '+(idx+1)+' via loadVideoById'+(cue?' (Cue '+cue+'s)':''),'sw');
+    try{
+      player.loadVideoById({videoId:list[idx], startSeconds:cue});
+    }catch(err){ log('AUSNAHME beim Wechsel: '+err,'gap'); }
+    // Entscheidende Nachschau: laeuft es 6s spaeter wirklich?
+    setTimeout(()=>{
+      let st='?';
+      try{ st=S[player.getPlayerState()]||'?'; }catch(e){}
+      if(st==='PLAYING'){
+        log('>> STATUS +6s: PLAYING — Wechsel im Hintergrund gelungen','verd');
+      } else {
+        log('>> STATUS +6s: '+st+' — KEIN Start. H-A/H-B bestaetigt','verd');
+      }
+    },6000);
+  },iv*1000);
+};
+
+document.getElementById('stop').onclick=()=>{
+  clearInterval(switchTimer); switchTimer=null;
+  try{ player.stopVideo(); }catch(e){}
+  log('Gestoppt.'); mode=null;
+};
+document.getElementById('mark').onclick=()=>log('----- MARKE -----');
+document.getElementById('copy').onclick=()=>{
+  navigator.clipboard.writeText(logEl.innerText)
+    .then(()=>log('Log kopiert.')).catch(()=>log('Bitte Text manuell markieren.'));
+};
+
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){ bgAt=performance.now(); log('>>> in den Hintergrund'); }
+  else { const a=bgAt?((performance.now()-bgAt)/1000).toFixed(1):'?';
+         log('<<< zurueck im Vordergrund ('+a+'s weg)'); }
+});
+</script>
+</body>
+</html>
