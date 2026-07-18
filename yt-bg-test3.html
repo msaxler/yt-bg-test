@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YT Hintergrundtest 3</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;padding:12px;background:#14161a;color:#e6e8eb}
+  h1{font-size:.95rem;margin:0 0 10px}
+  #player{width:100%;aspect-ratio:16/9;background:#000}
+  .row{display:flex;gap:8px;margin:8px 0;flex-wrap:wrap;align-items:center}
+  button{flex:1;min-width:100px;padding:12px 8px;font-size:.85rem;border:1px solid #3a3f47;
+         background:#222730;color:#e6e8eb;border-radius:6px}
+  button.go{background:#2d4a35;border-color:#3f6b4a}
+  input{padding:9px;font-size:.8rem;background:#1b1f26;color:#e6e8eb;
+        border:1px solid #3a3f47;border-radius:6px}
+  #ids{width:100%} #iv,#cue{width:66px}
+  label{font-size:.75rem;color:#9aa3ad}
+  #stat{font-size:.78rem;color:#9aa3ad;margin:8px 0;line-height:1.5}
+  #log{font-family:ui-monospace,monospace;font-size:.7rem;white-space:pre-wrap;
+       background:#0e1013;border:1px solid #2a2f36;border-radius:6px;padding:8px;
+       height:36vh;overflow-y:auto}
+  .gap{color:#ff9b5a;font-weight:700}
+  .ev{color:#7fd1a0}
+  .sw{color:#8ab4f8;font-weight:700}
+  .ok{color:#6ee7a0;font-weight:700}
+  .bad{color:#ff7b7b;font-weight:700}
+  .net{color:#c9a0ff}
+</style>
+</head>
+<body>
+
+<h1>YT Hintergrundtest 3 · Positionsfortschritt</h1>
+<div id="player"></div>
+
+<div class="row"><input id="ids" value="M7lc1UVf-VE,dQw4w9WgXcQ,9bZkp7q19f0,kJQP7kiw5Fk"></div>
+<div class="row">
+  <label>Wechsel alle</label><input id="iv" type="number" value="45" min="15"><label>s</label>
+  <label style="margin-left:10px">Cue</label><input id="cue" type="number" value="0" min="0"><label>s</label>
+</div>
+<div class="row">
+  <button class="go" id="mA">A · Playlist</button>
+  <button class="go" id="mB">B · loadVideoById</button>
+</div>
+<div class="row">
+  <button id="stop">Stopp</button><button id="mark">Marke</button><button id="copy">Log kopieren</button>
+</div>
+
+<div id="stat">Bereit.</div>
+<div id="log"></div>
+
+<script>
+const logEl=document.getElementById('log'),statEl=document.getElementById('stat');
+let player=null,t0=null,lastTick=null,ticks=0,maxGap=0,bgAt=null;
+let swTimer=null,idx=0,mode=null,list=[],lastPos=null,stallSince=null,playSecs=0;
+const S={'-1':'unstarted','0':'ENDED','1':'PLAYING','2':'PAUSED','3':'BUFFERING','5':'CUED'};
+
+function stamp(){
+  const r=t0?((performance.now()-t0)/1000).toFixed(1).padStart(6):'   --';
+  return new Date().toTimeString().slice(0,8)+' ['+r+'s]';
+}
+function log(m,c){const d=document.createElement('div');if(c)d.className=c;
+  d.textContent=stamp()+'  '+m;logEl.appendChild(d);logEl.scrollTop=logEl.scrollHeight;}
+
+function netInfo(){
+  let s = navigator.onLine ? 'online' : 'OFFLINE';
+  try{ const c=navigator.connection; if(c&&c.effectiveType) s+='/'+c.effectiveType; }catch(e){}
+  return s;
+}
+function hid(){ return document.hidden ? 'HG' : 'VG'; }   // Hintergrund / Vordergrund
+
+// ---- Kern: schreitet die Abspielposition fort? -----------------------------
+// getPlayerState() luegt im Hintergrund (meldet PLAYING ohne Ton).
+// Nur ein wachsendes getCurrentTime() beweist echte Wiedergabe.
+setInterval(()=>{
+  const now=performance.now();
+  if(lastTick!==null){
+    const g=(now-lastTick)/1000;
+    if(g>2.5){maxGap=Math.max(maxGap,g);log('*** PARENT-JS-LUECKE: '+g.toFixed(1)+'s ***','gap');}
+  }
+  lastTick=now; ticks++;
+
+  let pos=null,st='?';
+  try{ pos=player.getCurrentTime(); st=S[player.getPlayerState()]||'?'; }catch(e){}
+  if(pos!==null){
+    if(lastPos!==null){
+      if(pos>lastPos+0.2){                       // Position waechst -> echter Ton
+        playSecs++;
+        if(stallSince){
+          log('WIEDER LAEUFT ES nach '+((now-stallSince)/1000).toFixed(0)+'s Stillstand ['+hid()+']','ok');
+          stallSince=null;
+        }
+      } else {                                    // Position steht
+        if(!stallSince){
+          stallSince=now;
+          log('STILLSTAND ab Position '+pos.toFixed(1)+'s · Status '+st+' · '+netInfo()+' ['+hid()+']','bad');
+        }
+      }
+    }
+    lastPos=pos;
+  }
+  statEl.textContent='Modus '+(mode||'-')+' · '+hid()+' · '+st+' · Pos '+
+    (pos!==null?pos.toFixed(0):'-')+'s · echte Spielzeit '+playSecs+'s · max. Luecke '+maxGap.toFixed(1)+'s';
+},1000);
+
+const tag=document.createElement('script');
+tag.src='https://www.youtube.com/iframe_api';document.head.appendChild(tag);
+
+window.onYouTubeIframeAPIReady=function(){
+  player=new YT.Player('player',{height:'100%',width:'100%',playerVars:{playsinline:1},
+    events:{
+      onReady:()=>log('Player bereit. Netz: '+netInfo()),
+      onStateChange:e=>log('EVENT '+(S[e.data]||e.data)+' (Nr '+(idx+1)+') ['+hid()+']','ev'),
+      onError:e=>log('FEHLER '+e.data,'bad')
+    }});
+};
+
+function reset(){clearInterval(swTimer);swTimer=null;t0=performance.now();
+  lastTick=null;ticks=0;maxGap=0;idx=0;lastPos=null;stallSince=null;playSecs=0;logEl.innerHTML='';}
+
+document.getElementById('mA').onclick=()=>{
+  list=document.getElementById('ids').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!player||!list.length)return; reset(); mode='A';
+  log('MODUS A (Playlist) · Netz '+netInfo()+' · Display ausschalten.');
+  player.loadPlaylist({playlist:list});
+};
+
+document.getElementById('mB').onclick=()=>{
+  list=document.getElementById('ids').value.split(',').map(s=>s.trim()).filter(Boolean);
+  if(!player||!list.length)return; reset(); mode='B';
+  const iv=Math.max(15,parseInt(document.getElementById('iv').value)||45);
+  const cue=parseInt(document.getElementById('cue').value)||0;
+  log('MODUS B (loadVideoById) alle '+iv+'s, Cue '+cue+'s · Netz '+netInfo()+' · Display ausschalten.');
+  player.loadVideoById({videoId:list[0],startSeconds:cue});
+  swTimer=setInterval(()=>{
+    idx=(idx+1)%list.length;
+    const wasHidden=document.hidden;
+    const posBefore=(()=>{try{return player.getCurrentTime();}catch(e){return -1;}})();
+    log('>>> WECHSEL auf Nr '+(idx+1)+' ['+hid()+'] · '+netInfo(),'sw');
+    if(!wasHidden) log('   ACHTUNG: Wechsel fiel in den VORDERGRUND — nicht verwertbar','gap');
+    try{ player.loadVideoById({videoId:list[idx],startSeconds:cue}); }
+    catch(err){ log('AUSNAHME: '+err,'bad'); }
+    lastPos=null; stallSince=null;
+    // Urteil nach 10s: nur gueltig, wenn durchgehend im Hintergrund
+    setTimeout(()=>{
+      let p=-1,st='?';
+      try{ p=player.getCurrentTime(); st=S[player.getPlayerState()]||'?'; }catch(e){}
+      const stillHidden=document.hidden;
+      if(!wasHidden||!stillHidden){
+        log('>> URTEIL entfaellt (nicht durchgehend im Hintergrund)','gap');
+      } else if(p>1.5){
+        log('>> GELUNGEN: Position bei '+p.toFixed(1)+'s, Status '+st+' — echte Wiedergabe','ok');
+      } else {
+        log('>> GESCHEITERT: Position '+p.toFixed(1)+'s, Status '+st+', '+netInfo()+
+            ' — kein Fortschritt','bad');
+      }
+    },10000);
+  },iv*1000);
+};
+
+document.getElementById('stop').onclick=()=>{clearInterval(swTimer);swTimer=null;
+  try{player.stopVideo();}catch(e){} log('Gestoppt.');mode=null;};
+document.getElementById('mark').onclick=()=>log('----- MARKE ['+hid()+'] '+netInfo()+' -----');
+document.getElementById('copy').onclick=()=>navigator.clipboard.writeText(logEl.innerText)
+  .then(()=>log('Log kopiert.')).catch(()=>log('Bitte manuell markieren.'));
+
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden){bgAt=performance.now();log('>>> in den Hintergrund · '+netInfo());}
+  else{const a=bgAt?((performance.now()-bgAt)/1000).toFixed(1):'?';
+       log('<<< zurueck im Vordergrund ('+a+'s weg) · '+netInfo());}
+});
+window.addEventListener('online',()=>log('NETZ: wieder online','net'));
+window.addEventListener('offline',()=>log('NETZ: OFFLINE','net'));
+</script>
+</body>
+</html>
