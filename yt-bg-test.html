@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YT-iframe Playlist Hintergrundtest</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 12px;
+         background: #14161a; color: #e6e8eb; }
+  h1 { font-size: 1rem; margin: 0 0 10px; font-weight: 600; }
+  #player { width: 100%; aspect-ratio: 16/9; background: #000; }
+  .row { display: flex; gap: 8px; margin: 10px 0; flex-wrap: wrap; }
+  button { flex: 1; min-width: 90px; padding: 12px 8px; font-size: .9rem;
+           border: 1px solid #3a3f47; background: #222730; color: #e6e8eb;
+           border-radius: 6px; }
+  button:active { background: #2e343e; }
+  input { width: 100%; padding: 10px; font-size: .85rem; box-sizing: border-box;
+          background: #1b1f26; color: #e6e8eb; border: 1px solid #3a3f47;
+          border-radius: 6px; }
+  #stat { font-size: .8rem; color: #9aa3ad; margin: 8px 0; line-height: 1.5; }
+  #log { font-family: ui-monospace, monospace; font-size: .72rem;
+         white-space: pre-wrap; background: #0e1013; border: 1px solid #2a2f36;
+         border-radius: 6px; padding: 8px; height: 40vh; overflow-y: auto; }
+  .gap { color: #ff9b5a; font-weight: 700; }
+  .ev  { color: #7fd1a0; }
+</style>
+</head>
+<body>
+
+<h1>YouTube-iframe · Playlist · Hintergrundtest</h1>
+
+<div id="player"></div>
+
+<div class="row">
+  <input id="ids" placeholder="Video-IDs, kommagetrennt"
+         value="M7lc1UVf-VE,dQw4w9WgXcQ,9bZkp7q19f0,kJQP7kiw5Fk">
+</div>
+
+<div class="row">
+  <button id="start">Playlist starten</button>
+  <button id="mark">Marke setzen</button>
+  <button id="copy">Log kopieren</button>
+</div>
+
+<div id="stat">Bereit.</div>
+<div id="log"></div>
+
+<script>
+const logEl  = document.getElementById('log');
+const statEl = document.getElementById('stat');
+let player = null;
+let t0 = null;
+let lastTick = null;
+let tickCount = 0;
+let maxGap = 0;
+let bgEnteredAt = null;
+
+const STATES = {'-1':'unstarted','0':'ENDED','1':'PLAYING','2':'PAUSED',
+                '3':'BUFFERING','5':'cued'};
+
+function stamp() {
+  const d = new Date();
+  const rel = t0 ? ((performance.now() - t0) / 1000).toFixed(1).padStart(6) : '   --';
+  return d.toTimeString().slice(0,8) + ' [' + rel + 's]';
+}
+
+function log(msg, cls) {
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = stamp() + '  ' + msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// --- Kernstück der Diagnose -------------------------------------------------
+// Ein Sekundentakt. Läuft das Parent-JS im Hintergrund weiter, sind die
+// Abstaende ~1s. Wird der Tab eingefroren, entsteht eine Luecke - und genau
+// deren Laenge sagt, wie lange das Parent-JS tot war, waehrend evtl. der Ton
+// im iframe weiterlief.
+setInterval(() => {
+  const now = performance.now();
+  if (lastTick !== null) {
+    const gap = (now - lastTick) / 1000;
+    if (gap > 2.5) {
+      maxGap = Math.max(maxGap, gap);
+      log('*** PARENT-JS-LUECKE: ' + gap.toFixed(1) + 's ***', 'gap');
+    }
+  }
+  lastTick = now;
+  tickCount++;
+  updateStat();
+}, 1000);
+
+function updateStat() {
+  let s = 'Ticks: ' + tickCount + ' · groesste Luecke: ' + maxGap.toFixed(1) + 's';
+  if (player && player.getPlayerState) {
+    try {
+      s += ' · Status: ' + (STATES[player.getPlayerState()] || '?');
+      const idx = player.getPlaylistIndex ? player.getPlaylistIndex() : -1;
+      if (idx >= 0) s += ' · Titel #' + (idx + 1);
+    } catch (e) {}
+  }
+  statEl.textContent = s;
+}
+
+// --- YouTube IFrame API -----------------------------------------------------
+const tag = document.createElement('script');
+tag.src = 'https://www.youtube.com/iframe_api';
+document.head.appendChild(tag);
+
+window.onYouTubeIframeAPIReady = function () {
+  player = new YT.Player('player', {
+    height: '100%', width: '100%',
+    playerVars: { playsinline: 1 },
+    events: {
+      onReady: () => log('Player bereit. Auf "Playlist starten" tippen.'),
+      onStateChange: (e) => {
+        const idx = player.getPlaylistIndex ? player.getPlaylistIndex() : -1;
+        log('EVENT ' + (STATES[e.data] || e.data) +
+            (idx >= 0 ? '  (Titel #' + (idx + 1) + ')' : ''), 'ev');
+      },
+      onError: (e) => log('FEHLER Code ' + e.data)
+    }
+  });
+};
+
+document.getElementById('start').onclick = () => {
+  const list = document.getElementById('ids').value
+                 .split(',').map(s => s.trim()).filter(Boolean);
+  if (!player || !list.length) return;
+  t0 = performance.now();
+  lastTick = null; tickCount = 0; maxGap = 0;
+  logEl.innerHTML = '';
+  log('Start. ' + list.length + ' Titel. Jetzt Display ausschalten.');
+  player.loadPlaylist({ playlist: list });
+};
+
+document.getElementById('mark').onclick = () => log('----- MARKE -----');
+
+document.getElementById('copy').onclick = () => {
+  navigator.clipboard.writeText(logEl.innerText)
+    .then(() => log('Log kopiert.'))
+    .catch(() => log('Kopieren nicht moeglich - Text manuell markieren.'));
+};
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    bgEnteredAt = performance.now();
+    log('>>> in den Hintergrund');
+  } else {
+    const away = bgEnteredAt ? ((performance.now() - bgEnteredAt) / 1000).toFixed(1) : '?';
+    log('<<< zurueck im Vordergrund (' + away + 's weg)');
+  }
+});
+</script>
+</body>
+</html>
